@@ -4,8 +4,8 @@ from sklearn.pipeline import Pipeline
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.decomposition import PCA
 from sklearn.cluster import DBSCAN
-from sentence_transformers import SentenceTransformer
 from sklearn.metrics import silhouette_score
+from sentence_transformers import SentenceTransformer
 from typing import List
 
 # Initialize FastAPI
@@ -15,12 +15,12 @@ app = FastAPI()
 URI = "mongodb://localhost:27017/"
 client = MongoClient(URI)
 db = client['neutra_news_mid']
-news_articles_collection = db['news_articles']
+news_articles_collection = db['articles']
 story_collection = db['stories']
 
 # Define custom transformer
 class EmbeddingTransformer(BaseEstimator, TransformerMixin):
-    def _init_(self, model_name="all-MiniLM-L6-v2"):
+    def __init__(self, model_name="all-MiniLM-L6-v2"):
         self.model = SentenceTransformer(model_name)
     
     def fit(self, X, y=None):
