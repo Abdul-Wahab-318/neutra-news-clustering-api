@@ -8,6 +8,10 @@ from typing import List
 from config.db import db
 from utils.helpers import get_articles_grouped_by_date , get_story_headlines_map ,insert_story_headlines , insert_story
 from utils.helpers import get_cluster_pipeline , update_article
+import os
+import google.generativeai as genai
+from google.ai.generativelanguage_v1beta.types import content
+from utils.prompt_instructions import instructions
 
 # Initialize FastAPI
 app = FastAPI()
@@ -51,7 +55,7 @@ def process_articles_by_day():
     return results
 
 # Define the FastAPI endpoint
-@app.post("/process-articles")
+@app.post("/cluster-articles")
 def process_articles_endpoint():
     """
     Endpoint to trigger article processing.
@@ -61,4 +65,48 @@ def process_articles_endpoint():
 
 @app.patch("/review_articles")
 def review_articles_endpoint():
+    
+    article_collection = db['articles']
+    unreviewed_articles = list(article_collection.find({'status' : 'scraped'}).limit(1))
+    
+    genai.configure(api_key="AIzaSyATk9QPe9VjGfyg5VajajNPsp-9PcigZnU")
+
+    # Create the model
+    generation_config = {
+    "temperature": 0.8,
+    "top_p": 0.95,
+    "top_k": 40,
+    "max_output_tokens": 8192,
+    "response_schema": content.Schema(
+        type = content.Type.OBJECT,
+        enum = [],
+        required = ["bias_labels", "bias_reason"],
+        properties = {
+        "bias_labels": content.Schema(
+            type = content.Type.ARRAY,
+            items = content.Schema(
+            type = content.Type.STRING,
+            ),
+        ),
+        "bias_reason": content.Schema(
+            type = content.Type.STRING,
+        ),
+        },
+    ),
+    "response_mime_type": "application/json",
+    }
+
+    model = genai.GenerativeModel(
+    model_name="gemini-1.5-flash",
+    generation_config=generation_config,
+    system_instruction=instructions,
+    )
+    
+    for article in unreviewed_articles:
+        prompt = article['title'] + "\n" + article['content']
+        chat_session = model.start_chat(history=[])
+        response = chat_session.send_message(prompt)
+        print(response.text)
+    
+    return {"status": "success", "result" : response.text }
     pass
