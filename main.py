@@ -9,9 +9,11 @@ from config.db import db
 from utils.helpers import get_articles_grouped_by_date , get_story_headlines_map ,insert_story_headlines , insert_story
 from utils.helpers import get_cluster_pipeline , update_article
 import os
+from datetime import datetime , timedelta
 import google.generativeai as genai
 from google.ai.generativelanguage_v1beta.types import content
 from utils.prompt_instructions import instructions
+import pandas as pd
 
 # Initialize FastAPI
 app = FastAPI()
@@ -62,6 +64,52 @@ def process_articles_endpoint():
     """
     results = process_articles_by_day()
     return {"status": "success", "results": results}
+
+def fetch_articles_last_24_hours():
+    articles = db['articles']
+    
+    now = datetime.now()
+    twenty_four_hours_ago = now - timedelta(days=1)
+    
+    pipeline = [
+        {
+        '$match': {'scraped_date': {'$gte': twenty_four_hours_ago}}
+        },
+        {
+            '$project': {
+                'link': 1,
+                'title': 1,
+                'story_id': {'$ifNull': ['$story_id', None]}  # Assign null if missing
+            }
+        }
+    ]
+    
+    recent_articles = list(articles.aggregate(pipeline))
+    return recent_articles
+
+@app.post("/cluster-articles-test")
+def cluster_articles_test():
+    """
+        Endpoint to group together similar articles together by creating stories.
+    """
+    recent_articles = fetch_articles_last_24_hours()
+    df = pd.DataFrame(recent_articles)
+    recent_titles = df['title']
+    recent_story_ids = df['story_id']
+    
+    pipeline = get_cluster_pipeline()
+    y_pred = pipeline.fit_predict(recent_titles)
+    
+    results = zip(recent_titles , y_pred)
+    results = sorted(results, key=lambda x : x[1])
+
+    #print(df.head())
+    print(df['title'].values)
+    # for title , label in results:
+    #     print(title , " : " , label)
+    
+    return {"status": "success", "results": "bruh"}
+    
 
 @app.patch("/review_articles")
 def review_articles_endpoint():
