@@ -8,12 +8,16 @@ from typing import List
 from config.db import db
 from utils.helpers import get_articles_grouped_by_date , get_story_headlines_map ,insert_story_headlines , insert_story
 from utils.helpers import get_cluster_pipeline , update_article
+from utils.model import model
 import os
 from datetime import datetime , timedelta
 import google.generativeai as genai
 from google.ai.generativelanguage_v1beta.types import content
 from utils.prompt_instructions import instructions
 import pandas as pd
+import json
+import time
+import csv
 
 # Initialize FastAPI
 app = FastAPI()
@@ -57,7 +61,7 @@ def process_articles_by_day():
     return results
 
 # Define the FastAPI endpoint
-@app.post("/cluster-articles")
+@app.post("/articles/cluster")
 def process_articles_endpoint():
     """
     Endpoint to trigger article processing.
@@ -87,7 +91,7 @@ def fetch_articles_last_24_hours():
     recent_articles = list(articles.aggregate(pipeline))
     return recent_articles
 
-@app.post("/cluster-articles-test")
+@app.post("/articles/cluster/test")
 def cluster_articles_test():
     """
         Endpoint to group together similar articles together by creating stories.
@@ -111,50 +115,82 @@ def cluster_articles_test():
     return {"status": "success", "results": "bruh"}
     
 
-@app.patch("/review_articles")
+@app.patch("/articles/review")
 def review_articles_endpoint():
     
     article_collection = db['articles']
-    unreviewed_articles = list(article_collection.find({'status' : 'scraped'}).limit(1))
+    unreviewed_articles = article_collection.find(
+        {'status' : 'scraped'},
+        {'_id' : 1 , 'content' : 1 , 'title' : 1}
+    ).limit(900)
+    unreviewed_articles = list(unreviewed_articles)
     
-    genai.configure(api_key="AIzaSyATk9QPe9VjGfyg5VajajNPsp-9PcigZnU")
+    if(len(unreviewed_articles) == 0):
+        return {"status": "success", "result" : None , "message" : 'No articles to review' }
 
-    # Create the model
-    generation_config = {
-    "temperature": 0.8,
-    "top_p": 0.95,
-    "top_k": 40,
-    "max_output_tokens": 8192,
-    "response_schema": content.Schema(
-        type = content.Type.OBJECT,
-        enum = [],
-        required = ["bias_labels", "bias_reason"],
-        properties = {
-        "bias_labels": content.Schema(
-            type = content.Type.ARRAY,
-            items = content.Schema(
-            type = content.Type.STRING,
-            ),
-        ),
-        "bias_reason": content.Schema(
-            type = content.Type.STRING,
-        ),
-        },
-    ),
-    "response_mime_type": "application/json",
-    }
-
-    model = genai.GenerativeModel(
-    model_name="gemini-1.5-flash",
-    generation_config=generation_config,
-    system_instruction=instructions,
-    )
-    
     for article in unreviewed_articles:
-        prompt = article['title'] + "\n" + article['content']
-        chat_session = model.start_chat(history=[])
-        response = chat_session.send_message(prompt)
-        print(response.text)
+        try:
+            prompt = article['title'] + "\n" + article['content']
+            chat_session = model.start_chat(history=[])
+            response = chat_session.send_message(prompt)
+            result = json.loads(response.text)
+            print("title : " , article['title'])
+            print("result : ")
+            print(result)
+            
+            if( "bias_reason" not in result or "bias_labels" not in result ):
+                print("Invalid result")
+                continue
+            
+            result['bias_labels'] = [label.lower() for label in result['bias_labels'] ]
+            
+            updated_article = article_collection.update_one(
+                { "_id" : article['_id'] } ,
+                { "$set" : { "bias_labels" : result['bias_labels'] , "bias_reason" : result['bias_reason'] , "status" : 'reviewed' }}
+            )
+            time.sleep(5)
+            
+        except Exception as e:
+            print("Error : " , e.message)
+            return {"status":"failed" , result : None , "message":e.mesasge}
     
-    return {"status": "success", "result" : response.text }
-    pass
+    return {"status": "success", "result" : None , "message" : f"Reviewed {len(unreviewed_articles)} articles" }
+
+@app.get('/articles/csv')
+def get_articles_csv():
+    
+    bias_labels = sorted(['spin' , 'opinion statements presented as fact' , 'sensationalism' , 'mudslinging' , 'omission of source' , 'factual'])
+    column_names = ['_id' , 'title' , 'link' , 'source' , 'bias_reason'] + bias_labels
+    article_collection = db['articles']
+    articles = list(article_collection.find( {"bias_reason" : {"$exists" : True}} , {'_id':1, 'title':1, 'link':1, 'source':1, 'bias_reason':1 ,"bias_labels":1} ))
+    print("Length : " , len(articles))
+    
+    for article in articles:
+        article_labels = [ 1 if label in article['bias_labels'] else 0 for label in bias_labels  ]
+        
+        article_data = {
+            '_id': article.get('_id'),
+            'title': article.get('title'),
+            'link': article.get('link'),
+            'source': article.get('source'),
+            'bias_reason': article.get('bias_reason', ''),  # Default to empty string if not present
+        }
+        
+        for i , label in enumerate(bias_labels):
+            article_data[label] = article_labels[i]
+        
+        
+        with open('neutra_news_dataset.csv', mode='a', newline='') as file:
+            
+            writer = csv.DictWriter(file, fieldnames=column_names)
+            
+            #if file is empty then write column names first
+            if(file.tell() == 0):
+                # Write the header (column names)
+                writer.writeheader()
+
+            # Write the data rows
+            writer.writerow(article_data)
+        
+    return {"status" : "success"}
+    
