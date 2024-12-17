@@ -64,6 +64,20 @@ def update_article(_id, story_id, blindspot=False):
     )
     return _id
 
+def assign_story_id_to_articles(articles , story_id , blindspot=False):
+    
+    filter_query = { '_id' : {'$in' : articles} }
+    update_query = { "$set" : { 'story_id' : story_id , 'status' : 'grouped' } }
+    
+    result = news_articles_collection.update_many(filter_query, update_query)
+    
+    print(f"Matched {result.matched_count} documents.")
+    print(f"Modified {result.modified_count} documents.")
+    
+def update_story_blindspot_status(story_id , blindspot):
+        updated_story = story_collection.update_one({ '_id' : story_id } , { '$set' : { 'blindspot' : blindspot } })
+        return story_id
+
 def get_story_headlines_map(articles_in_day):
     headlines_map = {}
     for article in articles_in_day:
@@ -83,4 +97,3 @@ def insert_story_headlines(story_headlines_map, date):
         })
         headlines_objectId_map[key] = inserted_doc.inserted_id
     return headlines_objectId_map
-

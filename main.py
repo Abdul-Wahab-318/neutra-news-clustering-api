@@ -1,29 +1,23 @@
-from fastapi import FastAPI
-from sklearn.pipeline import Pipeline
-from sklearn.base import BaseEstimator, TransformerMixin
-from sklearn.decomposition import PCA
-from sklearn.cluster import DBSCAN
-from sklearn.metrics import silhouette_score
-from typing import List
-from config.db import db
-from utils.helpers import get_articles_grouped_by_date , get_story_headlines_map ,insert_story_headlines , insert_story
-from utils.helpers import get_cluster_pipeline , update_article
-from utils.model import model
-import os
-from datetime import datetime , timedelta
-import google.generativeai as genai
-from google.ai.generativelanguage_v1beta.types import content
-from utils.prompt_instructions import instructions
 import pandas as pd
 import json
 import time
 import csv
+from fastapi import FastAPI
+from datetime import datetime , timedelta
+
+from config.db import db
+from utils.model import model
+from utils.helpers import get_articles_grouped_by_date , get_story_headlines_map ,insert_story_headlines , insert_story , assign_story_id_to_articles
+from utils.helpers import get_cluster_pipeline , update_article , update_story_blindspot_status
 
 # Initialize FastAPI
 app = FastAPI()
 
-
-def process_articles_by_day():
+@app.post("/articles/cluster")
+def process_articles_endpoint():
+    """
+    Endpoint to trigger article processing.
+    """
     articles_grouped_by_date = get_articles_grouped_by_date()
     results = []
     pipeline = get_cluster_pipeline()
@@ -58,31 +52,23 @@ def process_articles_by_day():
             "total_blindspots": blindspots
         })
     
-    return results
-
-# Define the FastAPI endpoint
-@app.post("/articles/cluster")
-def process_articles_endpoint():
-    """
-    Endpoint to trigger article processing.
-    """
-    results = process_articles_by_day()
     return {"status": "success", "results": results}
 
 def fetch_articles_last_24_hours():
-    articles = db['articles']
+    articles = db['articles_cluster']
     
     now = datetime.now()
     twenty_four_hours_ago = now - timedelta(days=1)
     
     pipeline = [
         {
-        '$match': {'scraped_date': {'$gte': twenty_four_hours_ago}}
+        '$match': {'scraped_date': {'$gte': twenty_four_hours_ago} , 'source' : 'Geo'}
         },
         {
             '$project': {
                 'link': 1,
                 'title': 1,
+                'blindspot' : 1,
                 'story_id': {'$ifNull': ['$story_id', None]}  # Assign null if missing
             }
         }
@@ -97,6 +83,10 @@ def cluster_articles_test():
         Endpoint to group together similar articles together by creating stories.
     """
     recent_articles = fetch_articles_last_24_hours()
+    
+    if( len(recent_articles) == 0):
+        return {"status" : "success" , "message" : "No articles to cluster in the past 24hours" , "result" : None}
+    
     df = pd.DataFrame(recent_articles)
     recent_titles = df['title']
     recent_story_ids = df['story_id']
@@ -104,17 +94,52 @@ def cluster_articles_test():
     pipeline = get_cluster_pipeline()
     y_pred = pipeline.fit_predict(recent_titles)
     
-    results = zip(recent_titles , y_pred)
-    results = sorted(results, key=lambda x : x[1])
-
-    #print(df.head())
-    print(df['title'].values)
-    # for title , label in results:
-    #     print(title , " : " , label)
+    df['label'] = y_pred
+    cluster_labels = set(y_pred)
+    
+    if( -1 in cluster_labels ):
+        cluster_labels.remove(-1)
+    
+    #FIRST HANDLE BLINDSPOT ARTICLES AND STORIES
+    df_blindspots = df[ (df['label'] == -1) & (df['story_id'].isna()) ]
+    for index , blindspot_article in df_blindspots.iterrows():
+        print("\n\nBlindspot article : " , blindspot_article['title'] )
+        print("Previous blindspot status : " , blindspot_article['blindspot'])
+        #story_id = insert_story( blindspot_article['title'] , blindspot_article['scraped_date'] , blindspot=True )
+        #updated_article = update_article(blindspot_article['_id'] , story_id , blindspot=True)
+    
+    #NEXT HANDLE GROUPED ARTICLES
+    
+    for label in cluster_labels:
+        df_cluster = df[ df['label'] == label ]
+        
+        first_existing_story_index = df_cluster['story_id'].first_valid_index()
+        
+        if first_existing_story_index is None: # if all articles dont belong to an already existing story in the past 24 hours
+            new_story = df_cluster.iloc[0,:]
+            isBlindspot = False
+            print('\n\nCompletely New cluster of news : ' , df_cluster['title'].values )
+            #new_story_id = insert_story(new_story['title'] , new_story['publish_date'] , isBlindspot) 
+            #assign_story_id_to_articles(df_cluster['_id'] , new_story_id , isBlindspot)
+            
+        else: # if we have an existing story in the past 24 hours
+            article_with_story_id = df_cluster.loc[first_existing_story_index]
+            isBlindspot = article_with_story_id['blindspot']
+            articles_to_update = df_cluster.drop(first_existing_story_index)
+            
+            if(isBlindspot): #if story was previously blindspot but now new articles have appeared then update story blindspot status 
+                #update_story_blindspot_status(article_with_story_id['story_id'] , False)
+                print("\n\nArticle was blindspot but now new articles have appeared : " , article_with_story_id['title'])
+            print("New articles : " , articles_to_update['title'].values)
+            #assign_story_id_to_articles(articles_to_update['_id'] , article_with_story_id['story_id'] , blindspot=False )
+            
+            pass
+            
+        print("\n\n")
+    
     
     return {"status": "success", "results": "bruh"}
     
-
 @app.patch("/articles/review")
 def review_articles_endpoint():
     
@@ -148,7 +173,7 @@ def review_articles_endpoint():
                 { "_id" : article['_id'] } ,
                 { "$set" : { "bias_labels" : result['bias_labels'] , "bias_reason" : result['bias_reason'] , "status" : 'reviewed' }}
             )
-            time.sleep(5)
+            time.sleep(4.1)
             
         except Exception as e:
             print("Error : " , e.message)
