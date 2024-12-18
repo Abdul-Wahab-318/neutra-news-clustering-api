@@ -3,84 +3,18 @@ import json
 import time
 import csv
 from fastapi import FastAPI
-from datetime import datetime , timedelta
 
 from config.db import db
 from utils.model import model
-from utils.helpers import get_articles_grouped_by_date , get_story_headlines_map ,insert_story_headlines , insert_story , assign_story_id_to_articles
-from utils.helpers import get_cluster_pipeline , update_article , update_story_blindspot_status
+from utils.helpers import  insert_story , assign_story_id_to_articles
+from utils.helpers import get_cluster_pipeline , update_article , update_story_blindspot_status , fetch_articles_last_24_hours
 
 # Initialize FastAPI
 app = FastAPI()
 
+
 @app.post("/articles/cluster")
-def process_articles_endpoint():
-    """
-    Endpoint to trigger article processing.
-    """
-    articles_grouped_by_date = get_articles_grouped_by_date()
-    results = []
-    pipeline = get_cluster_pipeline()
-    
-    for articles_in_day in articles_grouped_by_date:
-        blindspots = 0
-        titles = articles_in_day['titles']
-        title_ids = articles_in_day['ids']
-        
-        labels_pred = pipeline.fit_predict(titles)
-        articles = list(zip(title_ids, titles, labels_pred))
-        articles.sort(key=lambda x: x[2])
-
-        # Generate story headlines map
-        headlines_map = get_story_headlines_map(articles)
-        # Save story to database
-        headlines_objectId_map = insert_story_headlines(headlines_map, articles_in_day['_id'])
-        
-        # Update articles with 'group_headline' and 'blindspot'
-        for article in articles:
-            if article[2] == -1:
-                blindspots += 1
-                story_inserted = insert_story(article[1], articles_in_day['_id'], blindspot=True)
-                update_article(article[0], story_inserted, blindspot=True)
-            else:
-                update_article(article[0], headlines_objectId_map[article[2]], blindspot=False)
-        
-        results.append({
-            "date": articles_in_day['_id'],
-            "total_articles": len(titles),
-            "total_headlines": len(headlines_map),
-            "total_blindspots": blindspots
-        })
-    
-    return {"status": "success", "results": results}
-
-def fetch_articles_last_24_hours():
-    articles = db['articles']
-    
-    now = datetime.now()
-    twenty_four_hours_ago = now - timedelta(days=1)
-    #'source' : {'$ne' : 'Geo'}
-    pipeline = [
-        {
-        '$match': {'scraped_date': {'$gte': twenty_four_hours_ago} }
-        },
-        {
-            '$project': {
-                'link': 1,
-                'title': 1,
-                'scraped_date' : 1,
-                'status' : 1 ,
-                'blindspot' : {'$ifNull': ['$blindspot', None]},
-                'story_id': {'$ifNull': ['$story_id', None]}  # Assign null if missing
-            }
-        }
-    ]
-    
-    recent_articles = list(articles.aggregate(pipeline))
-    return recent_articles
-
-@app.post("/articles/cluster/test")
-def cluster_articles_test():
+def cluster_articles():
     """
         Endpoint to group together similar articles together by creating stories.
     """
@@ -106,7 +40,7 @@ def cluster_articles_test():
     for index , blindspot_article in df_blindspots.iterrows():
         print("\n\nBlindspot article : " , blindspot_article['title'] )
         print("Previous blindspot status : " , blindspot_article['blindspot'])
-        story_id = insert_story( blindspot_article['title'] , blindspot_article['scraped_date'] , blindspot=True )
+        story_id = insert_story( blindspot_article['title'] , blindspot_article['scraped_date'] , blindspot_article['entities'] , blindspot=True )
         updated_article = update_article(blindspot_article['_id']  , story_id , blindspot_article['status'] , blindspot=True)
     
     #NEXT HANDLE GROUPED ARTICLES
@@ -120,7 +54,7 @@ def cluster_articles_test():
             new_story = df_cluster.iloc[0,:]
             isBlindspot = False
             print('\n\nCompletely New cluster of news : ' , df_cluster['title'].values )
-            new_story_id = insert_story(new_story['title'] , new_story['scraped_date'] , isBlindspot) 
+            new_story_id = insert_story(new_story['title'] , new_story['scraped_date'] , new_story['entities'] , isBlindspot) 
             assign_story_id_to_articles(df_cluster['_id'].tolist() , new_story_id , isBlindspot)
             
         else: # if we have an existing story in the past 24 hours
@@ -147,9 +81,9 @@ def review_articles_endpoint():
     
     article_collection = db['articles']
     unreviewed_articles = article_collection.find(
-        {'status' : 'scraped'},
+        {'status' : 'grouped'},
         {'_id' : 1 , 'content' : 1 , 'title' : 1}
-    ).limit(900)
+    ).limit(500)
     unreviewed_articles = list(unreviewed_articles)
     
     if(len(unreviewed_articles) == 0):
@@ -162,7 +96,7 @@ def review_articles_endpoint():
             response = chat_session.send_message(prompt)
             result = json.loads(response.text)
             print("title : " , article['title'])
-            print("result : ")
+            print("link : " , article['link'])
             print(result)
             
             if( "bias_reason" not in result or "bias_labels" not in result ):
@@ -178,8 +112,8 @@ def review_articles_endpoint():
             time.sleep(4.1)
             
         except Exception as e:
-            print("Error : " , e.message)
-            return {"status":"failed" , result : None , "message":e.mesasge}
+            print("Error : " , e)
+            return {"status":"failed" , "result" : None , "message":e.message}
     
     return {"status": "success", "result" : None , "message" : f"Reviewed {len(unreviewed_articles)} articles" }
 

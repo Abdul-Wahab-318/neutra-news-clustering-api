@@ -3,6 +3,7 @@ from sklearn.decomposition import PCA
 from sklearn.pipeline import Pipeline
 from sklearn.cluster import DBSCAN
 from classes.EmbeddingTransformer import EmbeddingTransformer
+from datetime import datetime , timedelta
 from config.db import db
 
 news_articles_collection = db['articles']
@@ -21,6 +22,32 @@ def get_cluster_pipeline():
     ])
     
     return pipeline
+
+def fetch_articles_last_24_hours():
+
+    now = datetime.now()
+    twenty_four_hours_ago = now - timedelta(days=1)
+
+    pipeline = [
+        {
+        '$match': {'scraped_date': {'$gte': twenty_four_hours_ago} }
+        },
+        {
+            '$project': {
+                'link': 1,
+                'title': 1,
+                'scraped_date' : 1,
+                'status' : 1 ,
+                'entities' : 1,
+                'blindspot' : {'$ifNull': ['$blindspot', None]},
+                'story_id': {'$ifNull': ['$story_id', None]}  # Assign null if missing
+            }
+        }
+    ]
+    
+    recent_articles = list(news_articles_collection.aggregate(pipeline))
+    return recent_articles
+
 
 # Utility functions
 def get_articles_grouped_by_date():
@@ -49,10 +76,11 @@ def get_articles_grouped_by_date():
     print(len(aggregated_result))
     return aggregated_result
 
-def insert_story(title, date, blindspot=False):
+def insert_story(title, date, entities , blindspot=False):
     story = story_collection.insert_one({
         'title': title,
         'date': date,
+        'entities' : entities,
         'blindspot': blindspot
     })
     return story.inserted_id

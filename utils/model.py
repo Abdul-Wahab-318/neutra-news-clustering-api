@@ -2,7 +2,8 @@ import google.generativeai as genai
 from google.ai.generativelanguage_v1beta.types import content
 from utils.prompt_instructions import instructions , instructions_test
 
-genai.configure(api_key="AIzaSyATk9QPe9VjGfyg5VajajNPsp-9PcigZnU")
+#genai.configure(api_key="AIzaSyATk9QPe9VjGfyg5VajajNPsp-9PcigZnU")
+genai.configure(api_key="AIzaSyAEr4fW7ogimAdTY9jTObe-kT7-Dcv_5s0")
 
 # Create the model
 generation_config = {
@@ -32,6 +33,6 @@ generation_config = {
 model = genai.GenerativeModel(
 model_name="gemini-1.5-flash",
 generation_config=generation_config,
-system_instruction=instructions_test,
+system_instruction=instructions,
 )
     
