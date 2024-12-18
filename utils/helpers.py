@@ -57,10 +57,12 @@ def insert_story(title, date, blindspot=False):
     })
     return story.inserted_id
 
-def update_article(_id, story_id, blindspot=False):
+def update_article(_id, story_id, status , blindspot=False):
+    new_status = 'grouped' if status == 'scraped' else status
+    
     news_articles_collection.update_one(
         {'_id': _id},
-        {'$set': {'story_id': story_id, 'blindspot': blindspot}}
+        {'$set': {'story_id': story_id, 'blindspot': blindspot , 'status' : new_status}}
     )
     return _id
 
@@ -70,9 +72,7 @@ def assign_story_id_to_articles(articles , story_id , blindspot=False):
     update_query = { "$set" : { 'story_id' : story_id , 'status' : 'grouped' } }
     
     result = news_articles_collection.update_many(filter_query, update_query)
-    
-    print(f"Matched {result.matched_count} documents.")
-    print(f"Modified {result.modified_count} documents.")
+    return result
     
 def update_story_blindspot_status(story_id , blindspot):
         updated_story = story_collection.update_one({ '_id' : story_id } , { '$set' : { 'blindspot' : blindspot } })

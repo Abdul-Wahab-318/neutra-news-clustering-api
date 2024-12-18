@@ -55,20 +55,22 @@ def process_articles_endpoint():
     return {"status": "success", "results": results}
 
 def fetch_articles_last_24_hours():
-    articles = db['articles_cluster']
+    articles = db['articles']
     
     now = datetime.now()
     twenty_four_hours_ago = now - timedelta(days=1)
-    
+    #'source' : {'$ne' : 'Geo'}
     pipeline = [
         {
-        '$match': {'scraped_date': {'$gte': twenty_four_hours_ago} , 'source' : 'Geo'}
+        '$match': {'scraped_date': {'$gte': twenty_four_hours_ago} }
         },
         {
             '$project': {
                 'link': 1,
                 'title': 1,
-                'blindspot' : 1,
+                'scraped_date' : 1,
+                'status' : 1 ,
+                'blindspot' : {'$ifNull': ['$blindspot', None]},
                 'story_id': {'$ifNull': ['$story_id', None]}  # Assign null if missing
             }
         }
@@ -89,8 +91,7 @@ def cluster_articles_test():
     
     df = pd.DataFrame(recent_articles)
     recent_titles = df['title']
-    recent_story_ids = df['story_id']
-    
+
     pipeline = get_cluster_pipeline()
     y_pred = pipeline.fit_predict(recent_titles)
     
@@ -105,8 +106,8 @@ def cluster_articles_test():
     for index , blindspot_article in df_blindspots.iterrows():
         print("\n\nBlindspot article : " , blindspot_article['title'] )
         print("Previous blindspot status : " , blindspot_article['blindspot'])
-        #story_id = insert_story( blindspot_article['title'] , blindspot_article['scraped_date'] , blindspot=True )
-        #updated_article = update_article(blindspot_article['_id'] , story_id , blindspot=True)
+        story_id = insert_story( blindspot_article['title'] , blindspot_article['scraped_date'] , blindspot=True )
+        updated_article = update_article(blindspot_article['_id']  , story_id , blindspot_article['status'] , blindspot=True)
     
     #NEXT HANDLE GROUPED ARTICLES
     
@@ -119,19 +120,20 @@ def cluster_articles_test():
             new_story = df_cluster.iloc[0,:]
             isBlindspot = False
             print('\n\nCompletely New cluster of news : ' , df_cluster['title'].values )
-            #new_story_id = insert_story(new_story['title'] , new_story['publish_date'] , isBlindspot) 
-            #assign_story_id_to_articles(df_cluster['_id'] , new_story_id , isBlindspot)
+            new_story_id = insert_story(new_story['title'] , new_story['scraped_date'] , isBlindspot) 
+            assign_story_id_to_articles(df_cluster['_id'].tolist() , new_story_id , isBlindspot)
             
         else: # if we have an existing story in the past 24 hours
+
             article_with_story_id = df_cluster.loc[first_existing_story_index]
             isBlindspot = article_with_story_id['blindspot']
-            articles_to_update = df_cluster.drop(first_existing_story_index)
+            articles_to_update = df_cluster[ df_cluster['story_id'].isna() ]
             
             if(isBlindspot): #if story was previously blindspot but now new articles have appeared then update story blindspot status 
-                #update_story_blindspot_status(article_with_story_id['story_id'] , False)
+                update_story_blindspot_status(article_with_story_id['story_id'] , False)
                 print("\n\nArticle was blindspot but now new articles have appeared : " , article_with_story_id['title'])
             print("New articles : " , articles_to_update['title'].values)
-            #assign_story_id_to_articles(articles_to_update['_id'] , article_with_story_id['story_id'] , blindspot=False )
+            assign_story_id_to_articles(articles_to_update['_id'].tolist() , article_with_story_id['story_id'] , blindspot=False )
             
             pass
             
