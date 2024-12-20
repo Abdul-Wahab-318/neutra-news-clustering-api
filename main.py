@@ -82,7 +82,7 @@ def review_articles_endpoint():
     article_collection = db['articles']
     unreviewed_articles = article_collection.find(
         {'status' : 'grouped'},
-        {'_id' : 1 , 'content' : 1 , 'title' : 1}
+        {'_id' : 1 , 'content' : 1 , 'title' : 1 , 'link' : 1}
     ).limit(500)
     unreviewed_articles = list(unreviewed_articles)
     
@@ -113,7 +113,7 @@ def review_articles_endpoint():
             
         except Exception as e:
             print("Error : " , e)
-            return {"status":"failed" , "result" : None , "message":e.message}
+            return {"status":"failed" , "result" : None , "message":e}
     
     return {"status": "success", "result" : None , "message" : f"Reviewed {len(unreviewed_articles)} articles" }
 
